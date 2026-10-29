@@ -2,6 +2,7 @@ import time
 import hashlib
 import random
 from typing import List, Optional, Dict
+import json
 
 GOOGLPLEX = 10**100
 
@@ -135,9 +136,18 @@ def daily_work_recalculation(wallet, network_data):
 
 
 def validate_bit_transaction(tx: Dict, wallets: Dict[str, Wallet]) -> bool:
-    """Validate a transaction against its registered live wallet."""
+    """Validate required transaction fields against registered wallet state."""
+    import math
+
+    if not isinstance(tx, dict) or not isinstance(wallets, dict):
+        return False
+
     wallet_id = tx.get("wallet_id")
-    if not isinstance(wallet_id, str) or wallet_id not in wallets:
+    if not isinstance(wallet_id, str) or not wallet_id:
+        return False
+
+    wallet = wallets.get(wallet_id)
+    if wallet is None or getattr(wallet, "wallet_id", None) != wallet_id:
         return False
 
     if tx.get("direction") not in ("enter", "exit"):
@@ -145,25 +155,49 @@ def validate_bit_transaction(tx: Dict, wallets: Dict[str, Wallet]) -> bool:
     if tx.get("resource_type") not in ("hdd", "cpu", "memory"):
         return False
 
-    try:
-        actual_ppm = float(tx["ppm"])
-        expected_ppm = wallets[wallet_id].calculate_real_time_ppm()
-    except (KeyError, TypeError, ValueError, OverflowError):
+    for key in ("amount", "ppm", "timestamp"):
+        value = tx.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        if not math.isfinite(value):
+            return False
+
+    if tx["amount"] <= 0 or tx["timestamp"] <= 0 or tx["ppm"] < 0:
         return False
 
-    import math
-    return (
-        math.isfinite(actual_ppm)
-        and math.isfinite(expected_ppm)
-        and math.isclose(actual_ppm, expected_ppm, rel_tol=1e-12, abs_tol=0.01)
-    )
+    try:
+        expected_ppm = wallet.calculate_real_time_ppm()
+    except (ArithmeticError, TypeError, ValueError, AttributeError, OverflowError):
+        return False
+
+    if (
+        isinstance(expected_ppm, bool)
+        or not isinstance(expected_ppm, (int, float))
+        or not math.isfinite(expected_ppm)
+        or expected_ppm < 0
+    ):
+        return False
+
+    return tx["ppm"] == expected_ppm
 
 
 def process_block(block: Dict, wallets: Dict[str, Wallet]):
     if not validate_block(block, wallets):
         raise ValueError("Invalid block")
-    hash_val = hashlib.sha256(str(block).encode()).hexdigest()
-    return hash_val
+    try:
+        encoded = json.dumps(
+            block,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Block is not deterministically JSON-serializable"
+        ) from exc
+
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def validate_block(block: Dict, wallets: Dict[str, Wallet]) -> bool:

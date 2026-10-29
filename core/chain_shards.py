@@ -1,82 +1,268 @@
-import os
-import math
+"""Threshold-based source sharding using systematic Reed-Solomon coding.
+
+This module provides 3-of-5 erasure recovery for data shards. It does not
+provide authentication, blockchain persistence, or code execution.
+"""
+from __future__ import annotations
+
 import hashlib
-from pathlib import Path
-from typing import List, Dict
+import itertools
+from typing import Dict, List, Sequence
+
 
 class ChainShardManager:
-    """Manages code sharding, redundancy verification, and on-chain reconstruction."""
-    
-    def __init__(self, redundancy_threshold: int = 3, total_shards: int = 5):
+    """Split source bytes into 3 data shards plus 2 parity shards."""
+
+    DATA_SHARDS = 3
+    TOTAL_SHARDS = 5
+    SCHEME = "rs-gf256-systematic-v1"
+
+    def __init__(
+        self,
+        redundancy_threshold: int = 3,
+        total_shards: int = 5,
+    ) -> None:
+        if total_shards != self.TOTAL_SHARDS:
+            raise ValueError("This implementation requires exactly 5 total shards")
+        if redundancy_threshold != self.DATA_SHARDS:
+            raise ValueError("This implementation requires a 3-of-5 threshold")
+
         self.redundancy_threshold = redundancy_threshold
         self.total_shards = total_shards
 
-    def _hash_shard(self, content: bytes) -> str:
+    @staticmethod
+    def _gf_mul(a: int, b: int) -> int:
+        """Multiply two GF(256) elements using polynomial 0x11d."""
+        result = 0
+        while b:
+            if b & 1:
+                result ^= a
+            b >>= 1
+            a <<= 1
+            if a & 0x100:
+                a ^= 0x11D
+        return result & 0xFF
+
+    @classmethod
+    def _gf_pow(cls, value: int, exponent: int) -> int:
+        result = 1
+        while exponent:
+            if exponent & 1:
+                result = cls._gf_mul(result, value)
+            value = cls._gf_mul(value, value)
+            exponent >>= 1
+        return result
+
+    @classmethod
+    def _gf_inv(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("Zero has no multiplicative inverse")
+        return cls._gf_pow(value, 254)
+
+    @classmethod
+    def _invert_matrix(cls, matrix: List[List[int]]) -> List[List[int]]:
+        n = len(matrix)
+        if n == 0 or any(len(row) != n for row in matrix):
+            raise ValueError("Matrix must be non-empty and square")
+
+        augmented = [
+            row[:] + [1 if i == j else 0 for j in range(n)]
+            for i, row in enumerate(matrix)
+        ]
+
+        for col in range(n):
+            pivot = next(
+                (row for row in range(col, n)
+                 if augmented[row][col] != 0),
+                None,
+            )
+            if pivot is None:
+                raise ValueError("Shard matrix is singular")
+
+            augmented[col], augmented[pivot] = (
+                augmented[pivot], augmented[col]
+            )
+
+            scale = cls._gf_inv(augmented[col][col])
+            augmented[col] = [
+                cls._gf_mul(value, scale) for value in augmented[col]
+            ]
+
+            for row in range(n):
+                if row == col:
+                    continue
+                factor = augmented[row][col]
+                if factor:
+                    augmented[row] = [
+                        left ^ cls._gf_mul(factor, right)
+                        for left, right in zip(
+                            augmented[row], augmented[col]
+                        )
+                    ]
+
+        return [row[n:] for row in augmented]
+
+    @classmethod
+    def _generator_row(cls, index: int) -> List[int]:
+        if not 0 <= index < cls.TOTAL_SHARDS:
+            raise ValueError("Invalid shard index")
+
+        # The first three rows are identity (original data shards).
+        if index < cls.DATA_SHARDS:
+            return [
+                1 if column == index else 0
+                for column in range(cls.DATA_SHARDS)
+            ]
+
+        # Two parity rows: Vandermonde coefficients at x=1 and x=2.
+        x = index - cls.DATA_SHARDS + 1
+        return [cls._gf_pow(x, power) for power in range(cls.DATA_SHARDS)]
+
+    @classmethod
+    def _combine(
+        cls, coefficients: Sequence[int], chunks: Sequence[bytes]
+    ) -> bytes:
+        if not chunks:
+            return b""
+        size = len(chunks[0])
+        if any(len(chunk) != size for chunk in chunks):
+            raise ValueError("Shard sizes do not match")
+
+        output = bytearray(size)
+        for coefficient, chunk in zip(coefficients, chunks):
+            if coefficient == 0:
+                continue
+            if coefficient == 1:
+                for offset, byte in enumerate(chunk):
+                    output[offset] ^= byte
+            else:
+                for offset, byte in enumerate(chunk):
+                    output[offset] ^= cls._gf_mul(coefficient, byte)
+        return bytes(output)
+
+    @classmethod
+    def _hash_shard(cls, content: bytes) -> str:
         return hashlib.sha256(content).hexdigest()
 
-    def shard_code(self, source_code: str) -> List[Dict[str, str]]:
-        """Splits source code into indexed cryptographic shards."""
-        data = source_code.encode("utf-8")
-        chunk_size = math.ceil(len(data) / self.total_shards)
-        shards = []
-        
-        for i in range(self.total_shards):
-            chunk = data[i * chunk_size : (i + 1) * chunk_size]
-            shard_entry = {
-                "index": i,
-                "payload": chunk.hex(),
-                "checksum": self._hash_shard(chunk)
-            }
-            shards.append(shard_entry)
-            
-        return shards
+    def shard_code(self, source_code: str) -> List[Dict[str, object]]:
+        if not isinstance(source_code, str):
+            raise TypeError("source_code must be a string")
 
-    def place_on_chain(self, chain_state: List[Dict], source_code: str) -> List[Dict[str, str]]:
-        """Simulates placing code shards directly into chain blocks."""
+        data = source_code.encode("utf-8")
+        original_length = len(data)
+        chunk_size = max(1, (original_length + self.DATA_SHARDS - 1)
+                         // self.DATA_SHARDS)
+        padded = data.ljust(chunk_size * self.DATA_SHARDS, b"\x00")
+        data_chunks = [
+            padded[i * chunk_size:(i + 1) * chunk_size]
+            for i in range(self.DATA_SHARDS)
+        ]
+
+        chunks = list(data_chunks)
+        for index in range(self.DATA_SHARDS, self.TOTAL_SHARDS):
+            chunks.append(
+                self._combine(self._generator_row(index), data_chunks)
+            )
+
+        result: List[Dict[str, object]] = []
+        for index, chunk in enumerate(chunks):
+            result.append({
+                "index": index,
+                "payload": chunk.hex(),
+                "checksum": self._hash_shard(chunk),
+                "scheme": self.SCHEME,
+                "original_length": original_length,
+                "chunk_size": chunk_size,
+            })
+        return result
+
+    def place_on_chain(
+        self, chain_state: List[Dict], source_code: str
+    ) -> List[Dict[str, object]]:
         shards = self.shard_code(source_code)
-        # Store shards directly in the chain state structure
         for shard in shards:
-            block = {
+            chain_state.append({
                 "type": "CODE_SHARD",
                 "shard_index": shard["index"],
                 "payload": shard["payload"],
-                "checksum": shard["checksum"]
-            }
-            chain_state.append(block)
+                "checksum": shard["checksum"],
+                "scheme": shard["scheme"],
+                "original_length": shard["original_length"],
+                "chunk_size": shard["chunk_size"],
+            })
         return shards
 
     def reconstruct(self, chain_state: List[Dict]) -> str:
-        """Reconstitutes the live source code once redundancy threshold is met."""
-        collected_shards = {}
-        
-        for block in chain_state:
-            if block.get("type") == "CODE_SHARD":
-                idx = block["shard_index"]
-                payload_bytes = bytes.fromhex(block["payload"])
-                # Verify cryptographic integrity
-                if self._hash_shard(payload_bytes) == block["checksum"]:
-                    collected_shards[idx] = payload_bytes
+        """Recover the original UTF-8 source from any three valid shards."""
+        by_index: Dict[int, bytes] = {}
+        metadata = None
 
-        if len(collected_shards) < self.redundancy_threshold:
+        for block in chain_state:
+            if not isinstance(block, dict) or block.get("type") != "CODE_SHARD":
+                continue
+
+            try:
+                index = block["shard_index"]
+                payload_hex = block["payload"]
+                checksum = block["checksum"]
+                scheme = block["scheme"]
+                original_length = block["original_length"]
+                chunk_size = block["chunk_size"]
+
+                if type(index) is not int or not 0 <= index < self.TOTAL_SHARDS:
+                    continue
+                if scheme != self.SCHEME:
+                    continue
+                if type(original_length) is not int or original_length < 0:
+                    continue
+                if type(chunk_size) is not int or chunk_size < 1:
+                    continue
+                if not isinstance(payload_hex, str) or len(payload_hex) % 2:
+                    continue
+
+                payload = bytes.fromhex(payload_hex)
+                if len(payload) != chunk_size:
+                    continue
+                if self._hash_shard(payload) != checksum:
+                    continue
+
+                current_metadata = (original_length, chunk_size, scheme)
+                if metadata is not None and current_metadata != metadata:
+                    continue
+                if index in by_index and by_index[index] != payload:
+                    # Conflicting duplicate index: don't trust either copy.
+                    by_index.pop(index, None)
+                    continue
+
+                metadata = current_metadata
+                by_index[index] = payload
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        if len(by_index) < self.DATA_SHARDS or metadata is None:
             raise RuntimeError(
-                f"Insufficient redundancy: found {len(collected_shards)} shards, "
-                f"but {self.redundancy_threshold} required."
+                f"Insufficient valid shards: found {len(by_index)}, "
+                f"but {self.DATA_SHARDS} required"
             )
 
-        # Reassemble available sequential or threshold fragments
-        full_code_bytes = b""
-        for i in sorted(collected_shards.keys()):
-            full_code_bytes += collected_shards[i]
-            
-        return full_code_bytes.decode("utf-8")
+        original_length, chunk_size, _ = metadata
+        selected = sorted(by_index.items())[:self.DATA_SHARDS]
+        indices = [index for index, _ in selected]
+        chunks = [chunk for _, chunk in selected]
 
-if __name__ == "__main__":
-    manager = ChainShardManager(redundancy_threshold=3, total_shards=5)
-    dummy_code = "print('Crowd-Cloud Decentralized Live Execution Active')"
-    
-    chain = []
-    manager.place_on_chain(chain, dummy_code)
-    
-    reconstituted = manager.reconstruct(chain)
-    print("RECONSTITUTION SUCCESS:")
-    print(reconstituted)
+        matrix = [self._generator_row(index) for index in indices]
+        inverse = self._invert_matrix(matrix)
+        data_chunks = [
+            self._combine(inverse[row], chunks)
+            for row in range(self.DATA_SHARDS)
+        ]
+
+        recovered = b"".join(data_chunks)
+        if original_length > len(recovered):
+            raise RuntimeError("Invalid original length metadata")
+        recovered = recovered[:original_length]
+
+        try:
+            return recovered.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("Recovered data is not valid UTF-8") from exc
