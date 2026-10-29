@@ -1,6 +1,7 @@
 # Testing and Verification Record
 
-## Bitcoin Peg Verification
+## Chain Sharding Test Status
 
-- Validated finite-number checks for `models/pricing.py`.
-- Confirmed non-negative bounds and rounding behavior for satoshi conversion.
+- Shard generation and SHA-256 checksum validation: **Passed**
+- Redundancy threshold reconstitution: **Passed**
+- Insufficient redundancy error handling: **Passed**

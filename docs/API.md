@@ -1,5 +1,3 @@
 # API Integration Guide
 
-## Bitcoin Pegged Contribution Endpoint
-
-When submitting resource contributions, the server calculates authoritative satoshi rewards via `models/pricing.py`.
+Includes endpoints and verification flows for chain-backed code availability and retrieval.
