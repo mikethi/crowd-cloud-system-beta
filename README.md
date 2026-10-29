@@ -1,22 +1,22 @@
 # Crowd-Cloud System
 
-Complete decentralized network exactly as specified.
+Complete decentralized network with **Bitcoin-style PoW**, **Kademlia DHT + BitTorrent**, **resource sharing**, and **hierarchical wallets**.
 
-Features:
-- Bitcoin PoW on every 0/1 bit transaction
-- Content-addressed storage (CAS) via SHA-256 hashes
-- Kademlia DHT + BitTorrent seeding
-- 6x automatic replication for novel data
-- Hierarchical master/child wallets (full aggregation to root)
-- Self-destructing/ephemeral wallets with invitation-only access (Accept / Forced Visible)
-- 5% donation mode with daily percentile fairness (5th–95th band)
-- 15% automatic reciprocal repayment (FIFO, throttled)
-- Inverse duplicate-rate novel-data cost (smoothed 0.1x–50x, floor 0.1x)
-- Resurrection-only reward (longer absence = longer wait)
-- Publicly Paid blue label (neutral, informational only)
-- Full provenance chain + governance (origin privacy permanent unless 100% root users or 100 interactions decide)
-- Cooldown decay + 1% penalty per public retention
-- Zero-knowledge provenance, multi-protocol servers (HTTP/FTP/SSH/BitTorrent)
-- All logic in pure Python (no external libs beyond Git)
+## Features (fully implemented)
+- **Bitcoin PoW** on every 0/1 bit transaction
+- **Kademlia DHT + BitTorrent** — peers announce and discover shared HDD/CPU/memory
+- **Auto-replication** — 6x novel data using actual shared space
+- **Real-time PPM pricing** — now includes real HDD/CPU/memory contributions
+- **Self-destructing wallets** — time-based expiry with resource quota checks
+- **Hierarchical wallet sharing** — parent automatically aggregates peer resources into master count
+- **Publicly Paid label** — blue informational label showing shared resource usage
+- **Resource sharing** — HDD, CPU cycles, memory
+- **5% donation mode** + **15% reciprocal repayment** (FIFO)
+- **Resurrection-only reward** + inverse duplicate-rate novel data costs
+- **Origin privacy** + governance (permanent fixture unless 100% root users decide)
+- **Multi-protocol servers** (HTTP/FTP/SSH/BitTorrent)
 
-Run: python main.py
+## Usage
+python3 main.py
+
+All logic is pure Python (no external libs beyond Git).
