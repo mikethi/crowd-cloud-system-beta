@@ -1,5 +1,6 @@
 # models/wallet.py
 import time
+import uuid
 from typing import List, Optional
 
 GOOGLPLEX = 10**100
@@ -153,6 +154,7 @@ class Wallet:
             raise ValueError("calculated PPM must be finite and nonnegative")
 
         return {
+            "transaction_id": str(uuid.uuid4()),
             "wallet_id": self.wallet_id,
             "direction": direction,
             "resource_type": resource_type,

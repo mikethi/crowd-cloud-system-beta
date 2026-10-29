@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import unittest
+import uuid
 
 import main
 
@@ -13,6 +14,7 @@ class MainTransactionRegressionTests(unittest.TestCase):
         cls.wallets = {cls.wallet.wallet_id: cls.wallet}
         cls.ppm = cls.wallet.calculate_real_time_ppm()
         cls.tx = {
+            "transaction_id": str(uuid.uuid4()),
             "wallet_id": cls.wallet.wallet_id,
             "direction": "enter",
             "resource_type": "hdd",

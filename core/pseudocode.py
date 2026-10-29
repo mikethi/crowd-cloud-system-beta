@@ -3,6 +3,11 @@ import time
 import hashlib
 import random
 
+from core.transaction_contract import (
+    block_has_unique_transaction_ids,
+    valid_transaction_shape,
+)
+
 GOOGLPLEX = 10**100
 DUPLICATE_SMOOTH = 0.1
 MAX_DUPLICATE_COST = 50.0
@@ -116,7 +121,7 @@ def validate_bit_transaction(tx, wallets=None):
     """Validate a transaction against authoritative registered wallet state."""
     import math
 
-    if not isinstance(tx, dict) or not isinstance(wallets, dict):
+    if not valid_transaction_shape(tx) or not isinstance(wallets, dict):
         return False
 
     wallet_id = tx.get("wallet_id")
@@ -194,6 +199,8 @@ def validate_block(block, wallets=None):
 
     transactions = block.get("transactions")
     if not isinstance(transactions, list) or not transactions:
+        return False
+    if not block_has_unique_transaction_ids(transactions):
         return False
 
     return all(

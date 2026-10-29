@@ -1,8 +1,14 @@
 import time
+import uuid
 import hashlib
 import random
 from typing import List, Optional, Dict
 import json
+
+from core.transaction_contract import (
+    block_has_unique_transaction_ids,
+    valid_transaction_shape,
+)
 
 GOOGLPLEX = 10**100
 
@@ -93,9 +99,10 @@ class Wallet:
         print(f"[{self.wallet_id}] Discovering peers with {resource_type} via DHT + BitTorrent")
 
     def create_ppm_transaction(self, direction: str, resource_type: str = "hdd"):
-        """Every 0/1 bit is a transaction with real-time PPM"""
+        """Create a transaction with a unique UUID identity."""
         ppm = self.calculate_real_time_ppm()
         tx = {
+            "transaction_id": str(uuid.uuid4()),
             "wallet_id": self.wallet_id,
             "direction": direction,
             "resource_type": resource_type,
@@ -139,7 +146,7 @@ def validate_bit_transaction(tx: Dict, wallets: Dict[str, Wallet]) -> bool:
     """Validate required transaction fields against registered wallet state."""
     import math
 
-    if not isinstance(tx, dict) or not isinstance(wallets, dict):
+    if not valid_transaction_shape(tx) or not isinstance(wallets, dict):
         return False
 
     wallet_id = tx.get("wallet_id")
@@ -205,6 +212,8 @@ def validate_block(block: Dict, wallets: Dict[str, Wallet]) -> bool:
         return False
     transactions = block.get("transactions")
     if not isinstance(transactions, list) or not transactions:
+        return False
+    if not block_has_unique_transaction_ids(transactions):
         return False
 
     for tx in transactions:
