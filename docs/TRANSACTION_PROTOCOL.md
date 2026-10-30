@@ -1,40 +1,54 @@
 # Transaction Protocol — Design and Qualification
 
-Status: proposed; not yet implemented or approved as a protocol specification.
+Status: partially implemented; this document records verified behavior and
+remaining protocol decisions. It is not an approved production specification.
 
 ## Goals
 
 1. Define an exact transaction schema.
-2. Give transactions stable identities and define duplicate/replay handling.
+2. Give transactions stable identities and define duplicate handling.
 3. Specify how transaction amounts correspond to wallet resource changes.
-4. Keep transaction validation deterministic and consistent across validation,
-   block processing, and pseudocode/reference implementations.
+4. Keep validation, block processing, and reference pseudocode consistent.
 
 ## Current verified baseline
 
-The baseline commit is `d661275`. The current test suite includes tests that
-document known gaps: extra transaction fields are accepted, repeated identical
-transactions are not rejected by block validation, the amount is not tied to
-the wallet resource delta, and transactions lack an explicit nonce or ID.
+Commit `b079db2` adds a shared transaction contract used by block-processing
+and reference-pseudocode paths.
 
-These are known limitations, not approved protocol behavior.
+Each transaction must contain exactly these fields:
 
-## Proposed validation requirements
+- `transaction_id`
+- `wallet_id`
+- `direction`
+- `resource_type`
+- `amount`
+- `ppm`
+- `timestamp`
 
-- Reject missing required fields.
-- Reject unexpected fields once the canonical schema is approved.
-- Reject invalid types, booleans where numeric values are required, and
-  non-finite numeric values.
-- Use one canonical serialization and hashing contract.
-- Define a stable transaction identity and duplicate detection scope.
-- Validate all transactions before applying any wallet/resource mutation.
-- Ensure invalid blocks cannot partially mutate state.
-- Keep all implementations and reference pseudocode behavior aligned.
+`transaction_id` must be a canonical UUID string. Missing or unexpected fields
+are rejected, and duplicate transaction IDs within a single block are rejected.
 
-## Not yet specified
+Both processing paths serialize the complete block using sorted JSON keys,
+compact separators, UTF-8 encoding, `ensure_ascii=False`, and `allow_nan=False`,
+then calculate a SHA-256 hash of those bytes. Tests cover schema validation,
+identity changes affecting the block hash, duplicate rejection, and consistency
+between the processing paths.
 
-The protocol must explicitly choose the transaction fields, identity format,
-nonce scope, replay window, sender/owner authority, resource units, debit/credit
-semantics, rounding rules, and the point at which changes become final.
+## Guarantees and limitations
 
-No production implementation should infer these choices from field names alone.
+- Duplicate detection is scoped to an individual block; durable replay
+  protection across finalized blocks is not implemented.
+- The transaction `amount` is not yet bound to a corresponding wallet resource
+  delta.
+- A canonical UUID format does not, by itself, establish transaction ownership,
+  authorization, or replay protection.
+- Passing tests establishes only the tested behavior, not production readiness.
+
+## Remaining protocol decisions
+
+The protocol still needs to specify nonce or replay scope, sender/owner authority,
+resource units, debit/credit semantics, rounding, finality, and how transaction
+amounts relate to resource changes. State-mutation atomicity and validation
+ordering also require explicit verification before production claims are made.
+
+Do not infer these guarantees from field names or successful unit tests alone.
